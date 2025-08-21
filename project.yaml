@@ -1,0 +1,472 @@
+project:
+  name: Telegram DAO Platform
+  version: 1.0
+  language: TypeScript
+  network: Arbitrum
+  rpc_provider: Alchemy
+  database: Firebase Firestore
+  bot_interface: Telegram Bot (Telegraf.js)
+  smart_contracts: Solidity (DAOFactory, DAO, VaultFactory, Vault)
+  mode: Group + Private bot chat
+  coding_agent: Claude AI / Autonomous Dev Agent
+
+goal:
+  - Build a scalable, secure, real-time DAO system fully usable inside Telegram
+  - Integrate wallet creation, on-chain DAO actions, and interactive voting
+  - Deliver all DAO actions (create, propose, vote) via Telegram group or chat
+
+---
+
+phases:
+
+- phase: 1_wallet_system
+  description: Generate and manage Web3 wallets for each Telegram user
+  tasks:
+    - id: 1.1
+      name: Wallet Creation
+      input: Telegram user sends `/start`
+      output: ethers.Wallet (address + encrypted privateKey)
+      steps:
+        - Use `ethers.Wallet.createRandom()`
+        - Encrypt private key using AES-256 (Telegram ID + app salt)
+        - Store encrypted key + address in Firestore under `/users/{telegram_id}`
+        - Send backup message to user with private key (one-time)
+
+    - id: 1.2
+      name: Wallet Usage Handler
+      input: Wallet address from Firestore
+      output: Sign transactions with decrypted key
+      steps:
+        - Load encrypted key from Firestore
+        - Decrypt using server salt + Telegram ID
+        - Use `wallet.signTransaction()` for votes or proposals
+
+---
+
+- phase: 2_contracts
+  description: Build and deploy Solidity contracts including Vault plugin
+  tasks:
+    - id: 2.1
+      name: DAOFactory.sol
+      output: Compiled + deployed DAOFactory contract
+      steps:
+        - Create `createDAO(string name)` function
+        - Emit `DAOCreated(address daoAddress)`
+        - Map user address to DAO list
+        - Add vault registry for DAO-vault associations
+        - Use OpenZeppelin Ownable for access control
+        - Use OpenZeppelin Pausable for emergency stops
+        - Use OpenZeppelin ReentrancyGuard for security
+
+    - id: 2.2
+      name: DAO.sol
+      output: Individual DAO instance logic
+      steps:
+        - Proposal struct (id, title, description, yesVotes, noVotes, deadline)
+        - Functions: `addMember`, `propose`, `vote`, `executeProposal`
+        - Add `attachVault(address vaultAddress)` function (admin only)
+        - Add `detachVault()` function (admin only)
+        - Emit: `ProposalCreated`, `VoteCast`, `MemberAdded`, `VaultAttached`, `VaultDetached`
+        - Use OpenZeppelin Ownable for access control
+        - Use OpenZeppelin Pausable for emergency stops
+        - Use OpenZeppelin ReentrancyGuard for security
+
+    - id: 2.3
+      name: Vault.sol (NEW)
+      output: Modular vault contract for DAO treasury management
+      steps:
+        - Implement deposit/withdrawal functions
+        - Add multi-signature requirements for large transactions
+        - Include spending proposal integration
+        - Add emergency pause functionality
+        - Support ERC20 tokens and ETH
+        - Emit: `Deposit`, `Withdrawal`, `SpendingProposal`, `EmergencyPause`
+        - Use OpenZeppelin Ownable for access control
+        - Use OpenZeppelin Pausable for emergency stops
+        - Use OpenZeppelin ReentrancyGuard for security
+
+    - id: 2.4
+      name: VaultFactory.sol (NEW)
+      output: Factory for creating vault instances
+      steps:
+        - `createVault(address daoAddress, uint256 withdrawalLimit)` function
+        - Vault template management
+        - Emit `VaultCreated(address vaultAddress, address daoAddress)`
+        - Use OpenZeppelin Ownable for access control
+
+    - id: 2.5
+      name: Deployment Script
+      output: Deploy all contracts to Arbitrum via Alchemy
+      steps:
+        - Use `hardhat.config.ts` with Alchemy RPC
+        - Deploy DAOFactory, VaultFactory, and template contracts
+        - Save deployed addresses to JSON for bot to use
+        - Verify contracts on Arbiscan
+
+---
+
+- phase: 3_bot_core
+  description: Set up Telegram bot with basic command structure
+  tasks:
+    - id: 3.1
+      name: Telegraf Bot Setup
+      steps:
+        - Initialize bot with Telegraf.js
+        - Handle command: `/start`, `/create_dao`, `/propose`, `/vote`, `/my_dao`
+
+    - id: 3.2
+      name: Command Routing
+      steps:
+        - Route group messages `/propose@BotName` vs private commands
+        - Determine chat context: `ctx.chat.type` (group or private)
+
+---
+
+- phase: 4_dao_logic
+  description: Telegram-based DAO management, voting, and vault operations
+  tasks:
+    - id: 4.1
+      name: /create_dao Command
+      steps:
+        - Ask user for DAO name
+        - Sign + send transaction using wallet
+        - Store DAO info in Firestore `/daos/{dao_id}`
+
+    - id: 4.2
+      name: /propose Command
+      steps:
+        - Accept title + description
+        - Sign proposal with user wallet
+        - Call `propose()` on DAO contract
+        - Store proposal in Firestore `/daos/{dao_id}/proposals/{proposal_id}`
+
+    - id: 4.3
+      name: Voting Inline Handler
+      input: Telegram button callback
+      output: Signed vote transaction
+      steps:
+        - Parse `callback_data`: `vote_yes_{proposal_id}`
+        - Load user wallet
+        - Call `vote(proposalId, true)`
+        - Update Firestore with vote result
+
+    - id: 4.4
+      name: /attach_vault Command (Admin Only)
+      steps:
+        - Verify user is DAO admin
+        - Create new vault via VaultFactory
+        - Call `attachVault()` on DAO contract
+        - Store vault info in Firestore `/daos/{dao_id}/vault`
+        - Notify DAO members of vault attachment
+
+    - id: 4.5
+      name: /vault_balance Command
+      steps:
+        - Check if DAO has attached vault
+        - Query vault contract for current balances
+        - Display ETH and token balances to user
+        - Show recent transaction history
+
+    - id: 4.6
+      name: /vault_withdraw Proposal
+      steps:
+        - Create withdrawal proposal with amount and recipient
+        - Require DAO voting for withdrawals above threshold
+        - Execute withdrawal after successful vote
+        - Update vault balance and transaction history
+
+---
+
+- phase: 5_notifications
+  description: Send real-time vote request messages to DAO members
+  tasks:
+    - id: 5.1
+      name: Alchemy Webhook Handler
+      steps:
+        - Set up webhook for `ProposalCreated` events
+        - Receive event, parse DAO address
+
+    - id: 5.2
+      name: Member Lookup & Notify
+      input: DAO ID from event
+      output: Telegram inline vote message
+      steps:
+        - Query Firestore: `/daos/{dao_id}/members`
+        - Batch 100 members per 5 sec
+        - Use `bot.telegram.sendMessage(chatId, ...)` with inline buttons
+
+---
+
+- phase: 6_group_mode
+  description: Group-specific behavior for bot usage
+  tasks:
+    - id: 6.1
+      name: Enable Group Mode
+      steps:
+        - Disable bot privacy mode via BotFather
+        - Use `/command@BotName` parsing in handler
+        - Check `ctx.message.chat.type === 'group'`
+
+    - id: 6.2
+      name: Group-Based Proposal Posting
+      steps:
+        - Accept proposal in group (command or inline)
+        - Send formatted proposal message with buttons
+        - Record proposer’s Telegram ID
+
+    - id: 6.3
+      name: Vote Result Publishing
+      steps:
+        - Track votes in Firestore
+        - Update group with vote count after each vote
+        - Post final result on deadline expiry
+
+---
+
+- phase: 7_security_and_scaling
+  description: Secure wallet and optimize for scale
+  tasks:
+    - id: 7.1
+      name: Secure Key Storage
+      steps:
+        - Use AES-256 encryption
+        - Key derived from Telegram ID + backend salt
+        - Do not store private key in plaintext anywhere
+
+    - id: 7.2
+      name: Rate Limiting & Queuing
+      steps:
+        - Use `setTimeout` or task queue (Bull.js or Firebase Cloud Tasks)
+        - Retry failed Telegram sends (max 3x)
+
+---
+
+- phase: 8_user_experience
+  description: Improve usability and user onboarding
+  tasks:
+    - id: 8.1
+      name: Interactive Onboarding
+      steps:
+        - Create step-by-step wallet setup wizard
+        - Add tutorial commands (/help, /tutorial)
+        - Implement user progress tracking
+        
+    - id: 8.2
+      name: Rich UI Components
+      steps:
+        - Design custom inline keyboards for complex actions
+        - Add proposal preview before submission
+        - Implement vote confirmation dialogs
+        
+    - id: 8.3
+      name: Multi-language Support
+      steps:
+        - Add i18n framework
+        - Support English, Spanish, Chinese initially
+        - Detect user language from Telegram settings
+        
+    - id: 8.4
+      name: Error Handling & Retries
+      steps:
+        - Notify user of failed actions
+        - Allow retrying of failed transactions
+        - Implement exponential backoff for retries
+
+    - id: 8.5
+      name: Community Engagement
+      steps:
+        - Participate in bot testing
+        - Share feedback with users
+        - Monitor user activity and usage
+---
+
+- phase: 9_advanced_dao
+  description: Add sophisticated DAO governance features
+  tasks:
+    - id: 9.1
+      name: Proposal Types & Templates
+      steps:
+        - Add proposal categories (funding, governance, technical)
+        - Create proposal templates for common actions
+        - Implement proposal scheduling
+        
+    - id: 9.2
+      name: Voting Mechanisms
+      steps:
+        - Add weighted voting based on token holdings
+        - Implement quadratic voting option
+        - Add delegation/proxy voting
+        
+    - id: 9.3
+      name: Treasury Management
+      steps:
+        - Add basic treasury tracking
+        - Implement fund allocation proposals
+        - Add spending limits and approval workflows
+        - Add token minting and redemption
+        
+    - id: 9.4
+      name: Governance Token
+      steps:
+        - Create a custom ERC20 token
+        - Mint tokens to DAO members
+        - Holders vote on proposals
+        - Token holders can withdraw their rewards
+        
+    - id: 9.5
+      name: Token Voting Power
+      steps:
+        - Token holders vote based on their locked tokens
+        - Token lockup period adjustable
+        - Dynamic voting power updates
+        - Token holders can delegate voting power
+        - Token holders can withdraw delegation
+        
+    - id: 9.6
+      name: Token Vesting
+      steps:
+        - Token vesting schedule configurable
+        - Linear, cliff, or other vesting options
+        - Token unlocks gradually over time
+        - Token holders can withdraw vested tokens
+        
+    - id: 9.7
+      name: Multi-token Support
+      steps:
+        - Allow voting with multiple tokens
+        - Vote weight proportional to token holdings
+        - Token holders can withdraw multiple tokens
+        
+    - id: 9.8
+      name: Token Minting & Redemption
+      steps:
+        - Token holders can mint new tokens
+        - Token holders can redeem tokens for underlying assets
+        - Token redemption burns tokens and sends assets
+        - Token redemption fee adjustable
+        - Token redemption limit per user
+        - Token redemption lockup period
+        - Token redemption approval required
+        - Token redemption can be paused
+        - Token redemption can be restricted to certain addresses
+        - Token redemption can be restricted to certain tokens
+---
+
+- phase: 10_analytics
+  description: Add monitoring and analytics capabilities
+  tasks:
+    - id: 10.1
+      name: DAO Analytics Dashboard
+      steps:
+        - Track voting participation rates
+        - Monitor proposal success/failure rates
+        - Generate member activity reports
+        
+    - id: 10.2
+      name: Health Monitoring
+      steps:
+        - Add bot uptime monitoring
+        - Implement transaction failure alerts
+        - Create performance metrics tracking
+        
+    - id: 10.3
+      name: Export & Reporting
+      steps:
+        - Generate CSV exports of voting data
+        - Create governance reports
+        - Add audit trail functionality
+        
+    - id: 10.4
+      name: Security & Privacy
+      steps:
+        - Encrypt sensitive data at rest
+        - Implement data retention policies
+        - Add secure backup and recovery procedures
+        - Regular security audits
+        - Add on-chain governance data export
+        
+    - id: 10.5
+      name: Governance Data Privacy
+      steps:
+        - Encrypt voting data at rest
+        - Implement data anonymization
+        - Add data retention policies
+        - Implement data deletion requests
+        
+    - id: 10.5
+      name: Governance Data Security
+      steps:
+        - Use secure enclaves for sensitive operations
+        - Implement multi-factor authentication
+        - Regular security audits and penetration testing
+        - Data backups and recovery mechanisms
+        - Use secure communication protocols
+        
+    - id: 10.6
+      name: Governance Data Privacy
+      steps:
+        - Encrypt voting data at rest
+        - Implement data anonymization
+        - Add data retention policies
+        - Implement data deletion requests
+        - Use secure communication protocols
+        
+    - id: 10.7
+      name: Governance Data Backup & Recovery
+      steps:
+        - Implement regular data backups
+        - Create disaster recovery plans
+        - Test recovery procedures
+        - Ensure data accessibility after recovery
+        - Test data recovery procedures
+        - Test data deletion procedures
+        - Test data anonymization procedures
+        - Test data encryption procedures
+        - Test data decryption procedures
+        - Test data integrity procedures
+        - Test data confidentiality procedures
+        - Test data privacy procedures
+        - Test data security procedures
+        - Test data access procedures
+        - Test data retention procedures
+        - Test data deletion procedures
+        - Test data anonymization procedures
+        - Test data encryption procedures
+        - Test data decryption procedures
+        - Test data integrity procedures
+        - Test data confidentiality procedures
+        - Test data privacy procedures
+        - Test data security procedures
+        - Test data access procedures
+        - Test data retention procedures
+        - Test data deletion procedures
+        - Test data anonymization procedures
+
+## Updated Bot Commands
+
+Add these new commands to Phase 3:
+
+- `/attach_vault` - Admin attaches a vault to the DAO
+- `/detach_vault` - Admin detaches the current vault  
+- `/vault_balance` - Check current vault balance
+- `/vault_deposit` - Deposit funds to DAO vault
+- `/vault_withdraw` - Create withdrawal proposal
+- `/vault_history` - View transaction history
+
+## Updated Success Criteria
+
+success_criteria:
+- Wallet created < 2s and securely stored
+- DAO deployed and available on Arbitrum
+- Vault can be attached/detached by DAO admin
+- Vault operations require proper authorization
+- Proposal notification reaches 95% of members
+- Votes recorded securely on-chain
+- Bot fully functional in group and private chat
+- User onboarding completion rate > 80%
+- Average proposal creation time < 30 seconds
+- Multi-language support for 3+ languages
+- DAO analytics accessible via /stats command
+- System uptime > 99.5%
+- Transaction success rate > 95%
+- Vault transactions are transparent and auditable
